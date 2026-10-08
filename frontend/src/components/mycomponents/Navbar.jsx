@@ -2,7 +2,7 @@ import React from "react";
 import { useSelector } from "react-redux";
 import { LogOut, Upload, Video, Settings, User } from "lucide-react";
 import ContinueWithGithubButton from "./ContinueWithGithubButton";
-import useLogout from "@/hooks/UseLogout";
+import useLogout from "@/hooks/useLogout";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router";
 import {
@@ -32,9 +32,14 @@ function Navbar() {
   ];
 
   return (
-    <nav className="w-full px-6 py-3 bg-white border-b shadow-sm flex items-center justify-between fixed top-0 z-50">
+    <nav className="w-full px-6 py-3   border-b shadow-sm flex items-center justify-between fixed top-0 z-50">
       {/* Logo */}
-      <div className="text-xl font-bold text-black">MyTube</div>
+      <div
+        className="text-xl font-bold text-black"
+        onClick={() => navigate("/")}
+      >
+        MyTube
+      </div>
 
       {/* Authenticated nav or login button */}
       {isAuthenticated ? (
@@ -51,7 +56,6 @@ function Navbar() {
             </Button>
           ))}
 
-          {/* Avatar with Dropdown */}
           {authdata?.avatar_url && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

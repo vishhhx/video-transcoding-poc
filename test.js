@@ -1,0 +1,3 @@
+(()=>{
+        fetch('https://vish2004-mytube-session-tumbnail.s3.ap-south-1.amazonaws.com/images/68c42356e7a61db7f1a7ddb0/0f8ec3f4-4b45-42d3-b40a-8cacec0d5d1b?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIAWOOXTZPJZ4NKOOP5%2F20250917%2Fap-south-1%2Fs3%2Faws4_request&X-Amz-Date=20250917T213015Z&X-Amz-Expires=3600&X-Amz-Signature=0232098f3bd62967ed022df0ff521cbbb0ca29ad47b9b322e86c9f777f3efb46&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject').then((e)=>console.log(e)).catch((e)=>console.log(e))
+})()

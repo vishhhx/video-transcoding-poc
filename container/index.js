@@ -4,18 +4,20 @@ const {
   GetObjectCommand,
   PutObjectCommand,
 } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const fs = require("node:fs/promises");
 const newfs = require("node:fs");
+const { pipeline } = require("node:stream/promises");
 const ffmpeg = require("fluent-ffmpeg");
 const path = require("node:path");
 const { io } = require("socket.io-client");
-const socket = io(process.env.BACKENDURL);
+const socket = io(process.env.BACKENDURL || process.env.BACKEND_URL);
 socket.on("connect", () => {
   console.log(socket.id);
 });
 let progress = 0;
 const client = new S3Client({
-  region: "ap-south-1",
+  region: process.env.AWS_REGION || "ap-south-1",
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
@@ -48,7 +50,7 @@ async function getOriginalResolution(filePath) {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
       if (err) return reject(err);
       const videoStream = metadata.streams.find(
-        (s) => s.codec_type === "video"
+        (s) => s.codec_type === "video",
       );
       resolve({
         width: videoStream.width,
@@ -72,11 +74,22 @@ async function uploadFileToS3(filePath, s3Key) {
   console.log(` Uploaded ${s3Key}`);
 }
 
+async function getSignedS3Url(s3Key) {
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({
+      Bucket: process.env.TRANSCODEDVIDEOBUCKETNAME,
+      Key: s3Key,
+    }),
+    { expiresIn: 3600 },
+  );
+}
+
 async function processVideoHLS(originalPath) {
   const { height: originalHeight } = await getOriginalResolution(originalPath);
 
   const filteredResolutions = resolutions.filter(
-    (r) => r.height <= originalHeight
+    (r) => r.height <= originalHeight,
   );
   const masterPlaylistLines = [];
 
@@ -110,17 +123,36 @@ async function processVideoHLS(originalPath) {
           .output(`${outputDir}/${playlistName}`)
           .on("end", async () => {
             const files = await fs.readdir(outputDir);
-            for (const file of files) {
+            const segmentFiles = files.filter((file) => file.endsWith(".ts"));
+            for (const file of segmentFiles) {
               await uploadFileToS3(
                 path.join(outputDir, file),
-                `${key}/${res.name}/${file}`
+                `${key}/${res.name}/${file}`,
               );
             }
+
+            const playlistPath = path.join(outputDir, playlistName);
+            const playlist = await fs.readFile(playlistPath, "utf8");
+            const signedPlaylist = (
+              await Promise.all(
+                playlist.split("\n").map(async (line) => {
+                  if (!line.startsWith("segment-") || !line.endsWith(".ts")) {
+                    return line;
+                  }
+                  return getSignedS3Url(`${key}/${res.name}/${line}`);
+                }),
+              )
+            ).join("\n");
+            await fs.writeFile(playlistPath, signedPlaylist);
+            await uploadFileToS3(
+              playlistPath,
+              `${key}/${res.name}/${playlistName}`,
+            );
 
             masterPlaylistLines.push(
               `#EXT-X-STREAM-INF:BANDWIDTH=${res.bitrate * 1000},RESOLUTION=${
                 (res.height * 16) / 9
-              }x${res.height}\n${res.name}/${playlistName}`
+              }x${res.height}\n${await getSignedS3Url(`${key}/${res.name}/${playlistName}`)}`,
             );
             processedCount += 1;
             progress = Math.floor((processedCount / totalCount) * 100);
@@ -132,6 +164,14 @@ async function processVideoHLS(originalPath) {
               progress: progress,
               file: res.name,
             });
+            if (progress == 100) {
+              console.log("i am good hear");
+              socket.emit("videotranscoding-done", {
+                videoId: UploadId,
+                uploaderId: uploderID,
+                progress: 100,
+              });
+            }
             resolve();
           })
           .on("error", (err) => {
@@ -158,17 +198,11 @@ async function init() {
     });
     const uplodedvidoe = await client.send(command);
     const originalFile = `original.mp4`;
-    await fs.writeFile(originalFile, uplodedvidoe.Body);
+    await pipeline(uplodedvidoe.Body, newfs.createWriteStream(originalFile));
     console.log(" File downloaded from S3");
     const originalPath = path.resolve(originalFile);
     await processVideoHLS(originalPath);
     console.log(" Adaptive HLS streaming setup complete");
-
-    socket.emit("videotranscoding-done", {
-      videoId: UploadId,
-      uploaderId: uploderID,
-      progress: 100,
-    });
 
     socket.disconnect();
   } catch (error) {

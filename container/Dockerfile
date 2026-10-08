@@ -7,7 +7,7 @@ RUN apk update && apk upgrade && apk add --no-cache ffmpeg
 WORKDIR /app
 
 
-COPY package.json package-lock.json ./
+COPY package*.json ./
 RUN npm install
 
 

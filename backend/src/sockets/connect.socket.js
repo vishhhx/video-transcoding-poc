@@ -10,6 +10,8 @@ const SocketIo = async (httpServer) => {
     methods: ["GET", "POST"],
     credentials: true,
   });
+
+  
   io.use(async (socket, next) => {
     const cookies = socket.handshake.headers.cookie;
     if (cookies) {

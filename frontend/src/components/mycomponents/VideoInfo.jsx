@@ -9,6 +9,7 @@ import { AspectRatio } from "@radix-ui/react-aspect-ratio";
 import { Progress } from "../ui/progress";
 import { useSocket } from "@/context/SocketContex";
 import { toast } from "sonner";
+import VideoPlayer from "./VideoPlayer";
 
 function VideoInfo() {
   const { videoId } = useParams();
@@ -31,7 +32,7 @@ function VideoInfo() {
           return;
         }
         setVideo(response.data);
-        setStatus(response.data.status)
+        setStatus(response.data.status);
       } catch (err) {
         setError("Failed to load video details.");
         console.error("Error fetching video info:", err);
@@ -46,12 +47,11 @@ function VideoInfo() {
     if (!socket) return;
 
     console.log("Socket initialized");
-    const init=({ videoId, uploaderId, progress})=>{
-         console.log({ videoId, uploaderId, progress });
-          setStatus("processing");
-           setProgress(0);
-    }
-
+    const init = ({ videoId, uploaderId, progress }) => {
+      console.log({ videoId, uploaderId, progress });
+      setStatus("processing");
+      setProgress(0);
+    };
 
     const onProgress = ({ videoId, uploaderId, progress, file }) => {
       console.log({ videoId, uploaderId, progress, file });
@@ -71,9 +71,9 @@ function VideoInfo() {
       }));
       toast.success("Video is ready to view");
     };
-    const handleFail = ({msg}) => {
-      console.log(msg )
-      toast.error(msg)
+    const handleFail = ({ msg }) => {
+      console.log(msg);
+      toast.error(msg);
       setProgress(0);
       setFilename("");
       setStatus("failed");
@@ -83,14 +83,14 @@ function VideoInfo() {
       }));
       toast.error(`Transcoding failed: ${error}`);
     };
-    socket.on(`transcoding-init-${videoId}`,init)
+    socket.on(`transcoding-init-${videoId}`, init);
     socket.on(`transcoding-progress-${videoId}`, onProgress);
     socket.on(`transcoding-done-${videoId}`, onDone);
     socket.on(`transcoding-fail-${videoId}`, handleFail);
 
     return () => {
       socket.off(`transcoding-progress-${videoId}`, onProgress);
-       socket.on(`transcoding-init-${videoId}`,init)
+      socket.on(`transcoding-init-${videoId}`, init);
       socket.off(`transcoding-done-${videoId}`, onDone);
       socket.off(`transcoding-fail-${videoId}`, handleFail);
     };
@@ -116,20 +116,20 @@ function VideoInfo() {
       <div className="grid md:grid-cols-2 gap-8">
         {/* Left Column: Video + Thumbnail */}
         <div className="space-y-4">
-          <Card className="aspect-video bg-black text-white flex items-center justify-center">
-            <CardContent className="p-4 flex items-center justify-center h-full">
+          <Card className="aspect-video bg-black text-white overflow-hidden">
+            <CardContent className="p-0 h-full w-full">
               {video.status === "completed" ? (
-                <video
-                  controls
-                  className="rounded-lg w-full h-full object-cover"
+                <VideoPlayer
                   src={video.transcodedVideoKey}
+                  poster={video.thumbnailKey}
                 />
               ) : (
-                <span>Video processing...</span>
+                <div className="w-full h-full flex items-center justify-center">
+                  <span>Video processing...</span>
+                </div>
               )}
             </CardContent>
           </Card>
-
           <Separator />
 
           <div className="space-y-4">

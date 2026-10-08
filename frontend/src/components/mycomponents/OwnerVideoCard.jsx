@@ -13,10 +13,11 @@ export default function OwnerVideoCard({ video }) {
     isPublic,
     thumbnailKey,
     isVideoUploaded,
+    isThumbnailUploaded
   } = video;
-const navigate = useNavigate();
+  const navigate = useNavigate();
   return (
-    <Card className="rounded-2xl shadow-md overflow-hidden w-full max-w-md">
+    <Card className="rounded-2xl shadow-md overflow-hidden w-full max-w-md max-h-[450px] ">
       <AspectRatio ratio={712 / 401}>
         <img
           src={thumbnailKey}
@@ -42,7 +43,11 @@ const navigate = useNavigate();
 
         <div className="flex gap-2">
           {isVideoUploaded ? (
-            <Button variant="outline" size="sm" onClick={() => navigate(`/my-videos/${video._id}`)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate(`/my-videos/${video._id}`)}
+            >
               <Eye className="w-4 h-4 mr-1" /> View
             </Button>
           ) : (
