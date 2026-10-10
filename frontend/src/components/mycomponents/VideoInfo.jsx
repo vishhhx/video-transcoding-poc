@@ -10,22 +10,33 @@ import { Progress } from "../ui/progress";
 import { useSocket } from "@/context/SocketContex";
 import { toast } from "sonner";
 import VideoPlayer from "./VideoPlayer";
+import { getCloudFrontPlaylistUrl } from "@/utils/streamUrl";
 
 function VideoInfo() {
   const { videoId } = useParams();
   const navigate = useNavigate();
   const [video, setVideo] = useState(null);
   const [loading, setLoading] = useState(true);
+  // const [streamUrl, setStreamUrl] = useState(null);
+  // const [streamLoading, setStreamLoading] = useState(true);
+  // const [streamError, setStreamError] = useState(null);
   const [error, setError] = useState(null);
   const [status, setStatus] = useState("pending");
   const [progress, setProgress] = useState(0);
   const [filename, setFilename] = useState("");
   const socket = useSocket();
+
+  // Temporarily disabled while CloudFront viewer authorization is disabled locally.
+  // const fetchStream = useCallback(async () => {
+  //   const response = await axiosInstance.get(`/view/${videoId}/cookies`);
+  //   setStreamUrl(response.data.playlistUrl);
+  // }, [videoId]);
+
   useEffect(() => {
     const fetchVideoInfo = async () => {
       try {
         const response = await axiosInstance.get(
-          `/view/get-video-by-id/${videoId}`
+          `/view/get-video-by-id/${videoId}`,
         );
         if (!response.data.isVideoUploaded) {
           navigate(`/upload?videoId=${response.data._id}`);
@@ -42,6 +53,11 @@ function VideoInfo() {
     };
     fetchVideoInfo();
   }, [videoId, navigate]);
+
+  // Signed-cookie stream authorization is temporarily disabled locally.
+  // useEffect(() => {
+  //   if (status === "completed") fetchStream();
+  // }, [status, fetchStream]);
 
   useEffect(() => {
     if (!socket) return;
@@ -111,6 +127,8 @@ function VideoInfo() {
     return <div className="p-8 text-red-500 font-semibold">{error}</div>;
   }
 
+  const streamUrl = getCloudFrontPlaylistUrl(video?.transcodedVideoKey);
+
   return (
     <div className="p-6 md:p-10">
       <div className="grid md:grid-cols-2 gap-8">
@@ -120,14 +138,16 @@ function VideoInfo() {
             <CardContent className="p-0 h-full w-full">
               {video.status === "completed" ? (
                 <VideoPlayer
-                  src={video.transcodedVideoKey}
+                  src={streamUrl}
                   poster={video.thumbnailKey}
+                  // onRetry={fetchStream}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
                   <span>Video processing...</span>
                 </div>
               )}
+              {/* Signed-cookie loading and error UI is temporarily disabled locally. */}
             </CardContent>
           </Card>
           <Separator />

@@ -42,6 +42,7 @@ const aiRouter = require("./routes/ai.routes");
 app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/upload", uploadRouter);
 app.use("/api/v1/view", viewRouter);
+
 app.use("/api/v1/ai", aiRouter);
 const port = process.env.BACKEND_PORT || 8000;
 httpServer.listen(port, () => {

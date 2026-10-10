@@ -1,37 +1,66 @@
 require("dotenv").config();
+
 const {
   S3Client,
   GetObjectCommand,
   PutObjectCommand,
 } = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+
+const { NodeHttpHandler } = require("@smithy/node-http-handler");
 const fs = require("node:fs/promises");
 const newfs = require("node:fs");
 const { pipeline } = require("node:stream/promises");
 const ffmpeg = require("fluent-ffmpeg");
 const path = require("node:path");
 const { io } = require("socket.io-client");
+
 const socket = io(process.env.BACKENDURL || process.env.BACKEND_URL);
+
 socket.on("connect", () => {
   console.log(socket.id);
 });
+
 let progress = 0;
+
 const client = new S3Client({
   region: process.env.AWS_REGION || "ap-south-1",
+  maxAttempts: 5,
+
+  requestHandler: new NodeHttpHandler({
+    connectionTimeout: 120000,
+    requestTimeout: 0,
+    socketTimeout: 0,
+  }),
+
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
 });
+
 const BucketName = process.env.ORIGINALVIDEOBUCKETNAME;
 const key = process.env.KEY;
-const creadentails = key.split("/");
-const UploadId = creadentails[2].replace(".mp4", "");
-const uploderID = creadentails[1];
-console.log("reached");
+
+if (!key) {
+  throw new Error("KEY is missing from environment variables.");
+}
+
+const credentials = key.split("/");
+
+if (credentials.length < 3 || !credentials[2].endsWith(".mp4")) {
+  throw new Error(`Unexpected video S3 key format: ${key}`);
+}
+
+const UploadId = credentials[2].replace(/\.mp4$/, "");
+const uploaderID = credentials[1];
+
+const TranscodedBucketName = process.env.TRANSCODEDVIDEOBUCKETNAME;
+
+console.log("Transcoding worker initialized");
+
 socket.emit("videotranscoding-init", {
   videoId: UploadId,
-  uploaderId: uploderID,
+  uploaderId: uploaderID,
   progress: 0,
 });
 
@@ -47,174 +76,236 @@ const resolutions = [
 
 async function getOriginalResolution(filePath) {
   return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) return reject(err);
+    ffmpeg.ffprobe(filePath, (error, metadata) => {
+      if (error) {
+        return reject(error);
+      }
+
       const videoStream = metadata.streams.find(
-        (s) => s.codec_type === "video",
+        (stream) => stream.codec_type === "video",
       );
+
+      if (!videoStream) {
+        return reject(new Error("No video stream found."));
+      }
+
       resolve({
         width: videoStream.width,
         height: videoStream.height,
-        size: videoStream.duration,
+        duration: videoStream.duration,
       });
     });
   });
 }
 
 async function uploadFileToS3(filePath, s3Key) {
-  const putCommand = new PutObjectCommand({
-    Bucket: process.env.TRANSCODEDVIDEOBUCKETNAME,
-    Key: s3Key,
-    Body: newfs.createReadStream(filePath),
-    ContentType: s3Key.endsWith(".m3u8")
-      ? "application/x-mpegURL"
-      : "video/MP2T",
-  });
-  await client.send(putCommand);
-  console.log(` Uploaded ${s3Key}`);
+  const maxUploadAttempts = 4;
+
+  const contentType = s3Key.endsWith(".m3u8")
+    ? "application/vnd.apple.mpegurl"
+    : "video/mp2t";
+
+  for (let attempt = 1; attempt <= maxUploadAttempts; attempt += 1) {
+    try {
+      const command = new PutObjectCommand({
+        Bucket: TranscodedBucketName,
+        Key: s3Key,
+        Body: newfs.createReadStream(filePath),
+        ContentType: contentType,
+      });
+
+      await client.send(command);
+
+      console.log(`Uploaded: ${s3Key}`);
+      return;
+    } catch (error) {
+      if (attempt === maxUploadAttempts) {
+        throw error;
+      }
+
+      const delayMs = attempt * 2000;
+
+      console.warn(
+        `Upload attempt ${attempt}/${maxUploadAttempts} failed for ${s3Key}. ` +
+          `Retrying in ${delayMs}ms: ${error.message}`,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
 
-async function getSignedS3Url(s3Key) {
-  return getSignedUrl(
-    client,
-    new GetObjectCommand({
-      Bucket: process.env.TRANSCODEDVIDEOBUCKETNAME,
-      Key: s3Key,
-    }),
-    { expiresIn: 3600 },
+function transcodeResolution(
+  originalPath,
+  outputDir,
+  playlistName,
+  resolution,
+) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(originalPath)
+      .videoFilter(`scale=-2:${resolution.height}`)
+      .videoBitrate(resolution.bitrate)
+      .audioBitrate("128k")
+      .outputOptions([
+        "-preset",
+        "veryfast",
+        "-g",
+        "48",
+        "-sc_threshold",
+        "0",
+        "-hls_time",
+        "4",
+        "-hls_playlist_type",
+        "vod",
+        "-hls_segment_filename",
+        path.join(outputDir, "segment-%03d.ts"),
+      ])
+      .output(path.join(outputDir, playlistName))
+      .on("end", resolve)
+      .on("error", reject)
+      .run();
+  });
+}
+
+async function processResolution(originalPath, resolution) {
+  const outputDir = path.resolve(`output-${resolution.name}`);
+  const playlistName = `playlist-${resolution.name}.m3u8`;
+
+  await fs.mkdir(outputDir, { recursive: true });
+
+  await transcodeResolution(originalPath, outputDir, playlistName, resolution);
+
+  const files = await fs.readdir(outputDir);
+
+  const segmentFiles = files.filter((file) => file.endsWith(".ts")).sort();
+
+  // Upload the segments without changing their filenames.
+  for (const file of segmentFiles) {
+    await uploadFileToS3(
+      path.join(outputDir, file),
+      `${key}/${resolution.name}/${file}`,
+    );
+  }
+
+  // Upload the original FFmpeg playlist.
+  // Its segment references remain relative, e.g. segment-000.ts.
+  const playlistPath = path.join(outputDir, playlistName);
+
+  await uploadFileToS3(
+    playlistPath,
+    `${key}/${resolution.name}/${playlistName}`,
   );
+
+  console.log(`HLS for ${resolution.name} completed`);
+
+  return {
+    resolution,
+    playlistName,
+  };
 }
 
 async function processVideoHLS(originalPath) {
   const { height: originalHeight } = await getOriginalResolution(originalPath);
 
   const filteredResolutions = resolutions.filter(
-    (r) => r.height <= originalHeight,
+    (resolution) => resolution.height <= originalHeight,
   );
+
+  if (filteredResolutions.length === 0) {
+    throw new Error("No supported output resolution for this video.");
+  }
+
   const masterPlaylistLines = [];
 
-  let processedCount = 0;
-  const totalCount = filteredResolutions.length;
+  // Process sequentially to avoid launching several expensive FFmpeg
+  // jobs simultaneously and to make progress reporting reliable.
+  for (const resolution of filteredResolutions) {
+    const result = await processResolution(originalPath, resolution);
 
-  const hlsPromises = filteredResolutions.map((res) => {
-    return new Promise((resolve) => {
-      const outputDir = path.resolve(`output-${res.name}`);
-      const playlistName = `playlist-${res.name}.m3u8`;
+    const width = Math.round((result.resolution.height * 16) / 9);
 
-      fs.mkdir(outputDir, { recursive: true }).then(() => {
-        ffmpeg(originalPath)
-          .videoFilter(`scale=-2:${res.height}`)
-          .videoBitrate(res.bitrate)
-          .audioBitrate("128k")
-          .outputOptions([
-            "-preset",
-            "veryfast",
-            "-g",
-            "48",
-            "-sc_threshold",
-            "0",
-            "-hls_time",
-            "4",
-            "-hls_playlist_type",
-            "vod",
-            "-hls_segment_filename",
-            `${outputDir}/segment-%03d.ts`,
-          ])
-          .output(`${outputDir}/${playlistName}`)
-          .on("end", async () => {
-            const files = await fs.readdir(outputDir);
-            const segmentFiles = files.filter((file) => file.endsWith(".ts"));
-            for (const file of segmentFiles) {
-              await uploadFileToS3(
-                path.join(outputDir, file),
-                `${key}/${res.name}/${file}`,
-              );
-            }
+    masterPlaylistLines.push(
+      `#EXT-X-STREAM-INF:BANDWIDTH=${result.resolution.bitrate * 1000},RESOLUTION=${width}x${result.resolution.height}\n` +
+        `${result.resolution.name}/${result.playlistName}`,
+    );
 
-            const playlistPath = path.join(outputDir, playlistName);
-            const playlist = await fs.readFile(playlistPath, "utf8");
-            const signedPlaylist = (
-              await Promise.all(
-                playlist.split("\n").map(async (line) => {
-                  if (!line.startsWith("segment-") || !line.endsWith(".ts")) {
-                    return line;
-                  }
-                  return getSignedS3Url(`${key}/${res.name}/${line}`);
-                }),
-              )
-            ).join("\n");
-            await fs.writeFile(playlistPath, signedPlaylist);
-            await uploadFileToS3(
-              playlistPath,
-              `${key}/${res.name}/${playlistName}`,
-            );
+    progress = Math.floor(
+      (masterPlaylistLines.length / filteredResolutions.length) * 100,
+    );
 
-            masterPlaylistLines.push(
-              `#EXT-X-STREAM-INF:BANDWIDTH=${res.bitrate * 1000},RESOLUTION=${
-                (res.height * 16) / 9
-              }x${res.height}\n${await getSignedS3Url(`${key}/${res.name}/${playlistName}`)}`,
-            );
-            processedCount += 1;
-            progress = Math.floor((processedCount / totalCount) * 100);
-            console.log(` HLS for ${res.name} done`);
-            console.log(`Progress: ${progress}%`);
-            socket.emit("transcoding-progress", {
-              videoId: UploadId,
-              uploaderId: uploderID,
-              progress: progress,
-              file: res.name,
-            });
-            if (progress == 100) {
-              console.log("i am good hear");
-              socket.emit("videotranscoding-done", {
-                videoId: UploadId,
-                uploaderId: uploderID,
-                progress: 100,
-              });
-            }
-            resolve();
-          })
-          .on("error", (err) => {
-            console.error(` Error processing ${res.name}:`, err);
-            resolve();
-          })
-          .run();
-      });
+    console.log(`Progress: ${progress}%`);
+
+    socket.emit("transcoding-progress", {
+      videoId: UploadId,
+      uploaderId: uploaderID,
+      progress,
+      file: result.resolution.name,
     });
-  });
+  }
 
-  await Promise.all(hlsPromises);
+  // Relative child-playlist paths ensure playback stays on the host
+  // from which the master playlist was loaded (CloudFront).
+  const masterPlaylist = `#EXTM3U\n${masterPlaylistLines.join("\n")}\n`;
 
-  const masterPlaylist = `#EXTM3U\n${masterPlaylistLines.join("\n")}`;
   const masterPath = path.resolve("master.m3u8");
-  await fs.writeFile(masterPath, masterPlaylist);
+
+  await fs.writeFile(masterPath, masterPlaylist, "utf8");
+
   await uploadFileToS3(masterPath, `${key}/master.m3u8`);
+
+  console.log("Adaptive HLS streaming setup complete");
+
+  socket.emit("videotranscoding-done", {
+    videoId: UploadId,
+    uploaderId: uploaderID,
+    progress: 100,
+  });
 }
+
 async function init() {
+  let succeeded = false;
+
   try {
+    if (!BucketName || !TranscodedBucketName) {
+      throw new Error(
+        "ORIGINALVIDEOBUCKETNAME and TRANSCODEDVIDEOBUCKETNAME must be configured.",
+      );
+    }
+
     const command = new GetObjectCommand({
       Bucket: BucketName,
       Key: key,
     });
-    const uplodedvidoe = await client.send(command);
-    const originalFile = `original.mp4`;
-    await pipeline(uplodedvidoe.Body, newfs.createWriteStream(originalFile));
-    console.log(" File downloaded from S3");
-    const originalPath = path.resolve(originalFile);
-    await processVideoHLS(originalPath);
-    console.log(" Adaptive HLS streaming setup complete");
 
-    socket.disconnect();
+    const uploadedVideo = await client.send(command);
+
+    if (!uploadedVideo.Body) {
+      throw new Error("S3 returned an empty video body.");
+    }
+
+    const originalFile = path.resolve("original.mp4");
+
+    await pipeline(uploadedVideo.Body, newfs.createWriteStream(originalFile));
+
+    console.log("Original video downloaded from S3");
+
+    await processVideoHLS(originalFile);
+
+    succeeded = true;
   } catch (error) {
-    console.error(" Error:", error);
+    console.error("Transcoding failed:", error);
 
     socket.emit("videotranscoding-fail", {
       videoId: UploadId,
-      uploaderId: uploderID,
-      progress: 0,
+      uploaderId: uploaderID,
+      progress,
     });
-
+  } finally {
     socket.disconnect();
+  }
+
+  if (!succeeded) {
+    process.exitCode = 1;
   }
 }
 

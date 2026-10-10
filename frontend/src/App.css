@@ -1,0 +1,103 @@
+.mytube-player .video-js {
+  height: 100%;
+  width: 100%;
+  font-family: inherit;
+  background: #020617;
+}
+
+.mytube-player .video-js .vjs-tech {
+  position: absolute;
+  inset: 0;
+  display: block;
+  margin: auto;
+  height: 100% !important;
+  width: 100% !important;
+  object-fit: contain;
+  object-position: center center;
+  transform: none !important;
+}
+
+.mytube-player .video-js {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+
+.mytube-player .video-js .vjs-poster {
+  background-size: cover;
+}
+
+.mytube-player .video-js .vjs-control-bar {
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  width: auto;
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.86);
+  backdrop-filter: blur(12px);
+}
+
+.mytube-player .video-js .vjs-progress-control {
+  position: absolute;
+  top: -8px;
+  right: 0;
+  left: 0;
+  width: 100%;
+}
+
+.mytube-player .video-js .vjs-play-progress,
+.mytube-player .video-js .vjs-volume-level {
+  background: #f97316;
+}
+
+.mytube-player .video-js .vjs-slider {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.mytube-player .video-js .vjs-big-play-button {
+  top: 50%;
+  left: 50%;
+  width: 64px;
+  height: 64px;
+  margin: 0;
+  transform: translate(-50%, -50%);
+  border: 0;
+  border-radius: 999px;
+  background: #f97316;
+  box-shadow: 0 12px 35px rgba(2, 6, 23, 0.35);
+  transition:
+    transform 180ms ease,
+    background 180ms ease;
+}
+
+.mytube-player .video-js:hover .vjs-big-play-button,
+.mytube-player .video-js .vjs-big-play-button:focus {
+  transform: translate(-50%, -50%) scale(1.06);
+  background: #ea580c;
+}
+
+.mytube-player .video-js .vjs-button > .vjs-icon-placeholder::before {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.mytube-spinner {
+  animation: mytube-spin 800ms linear infinite;
+}
+
+@keyframes mytube-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 640px) {
+  .mytube-player {
+    border-radius: 14px;
+  }
+
+  .mytube-player .video-js .vjs-control-bar {
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+  }
+}
